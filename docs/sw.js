@@ -1,5 +1,5 @@
 // ChoreSync service worker: offline app shell + web push handling.
-const CACHE = "choresync-v1";
+const CACHE = "choresync-v2";
 const SHELL = [
   "./", "./index.html", "./styles.css", "./app.js", "./config.js",
   "./manifest.webmanifest", "./icon-192.png", "./icon-512.png",
