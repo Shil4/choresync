@@ -10,7 +10,12 @@ const sb = configured ? createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : 
 const HID = CFG.HOUSEHOLD_ID;
 
 // --- Chore data -------------------------------------------------------------
-const BUNDLES = [
+// Bundles are effective-dated: weeks before SWITCH_FROM use the old split, weeks
+// from that Monday onward use the new one-zone-each split. Past weeks keep their
+// original meaning so history and XP stay correct.
+const SWITCH_FROM = "2026-07-20";   // first Monday the new zones apply
+
+const OLD_BUNDLES = [
   { id: "A", title: "Hoover + kitchen surfaces", items: [
     { n: "Hoover carpet (connecting areas)", m: 20 },
     { n: "Kitchen — countertop", m: 5 },
@@ -28,6 +33,28 @@ const BUNDLES = [
     { n: "Kitchen — sweep", m: 6 },
     { n: "Kitchen — mop", m: 8 } ] },
 ];
+
+const NEW_BUNDLES = [
+  { id: "A", title: "Hoover & living areas", items: [
+    { n: "Hoover carpet (connecting areas)", m: 20 },
+    { n: "Living room — sweep", m: 8 },
+    { n: "Living room — trash", m: 4 },
+    { n: "Corridor (landing + LR entrance)", m: 5 } ] },
+  { id: "B", title: "Upstairs washroom", items: [
+    { n: "Washroom — sweep", m: 5 },
+    { n: "Washroom — mop", m: 8 },
+    { n: "Washroom — sink", m: 5 },
+    { n: "Bath / shower tub", m: 12 },
+    { n: "Toilet", m: 6 } ] },
+  { id: "C", title: "Kitchen", items: [
+    { n: "Kitchen — sink", m: 6 },
+    { n: "Kitchen — hob", m: 8 },
+    { n: "Kitchen — countertop", m: 5 },
+    { n: "Kitchen — microwave", m: 5 },
+    { n: "Kitchen — sweep", m: 6 },
+    { n: "Kitchen — mop", m: 8 } ] },
+];
+const bundlesFor = (monday) => (ymd(monday) >= SWITCH_FROM ? NEW_BUNDLES : OLD_BUNDLES);
 const bundleColor = { A: "var(--A)", B: "var(--B)", C: "var(--C)" };
 const PCOL = ["#6366f1", "#f43f5e", "#10b981"];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -43,7 +70,9 @@ const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate(
 function mondayOf(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - mod(x.getDay() + 6, 7)); return x; }
 function anchorMonday() { return mondayOf(new Date((state.household?.anchor_monday || "2026-07-13") + "T00:00:00")); }
 function weekIndexOf(monday) { return Math.round((monday - anchorMonday()) / (7 * 864e5)); }
-function assignmentsFor(wi, members) { return members.map((name, i) => ({ name, i, bundle: BUNDLES[mod(i + wi, 3)] })); }
+function mondayFromIndex(wi) { const d = new Date(anchorMonday()); d.setDate(d.getDate() + wi * 7); return d; }
+const bundlesForIndex = (wi) => bundlesFor(mondayFromIndex(wi));
+function assignmentsFor(wi, members) { const B = bundlesForIndex(wi); return members.map((name, i) => ({ name, i, bundle: B[mod(i + wi, 3)] })); }
 function prettyRange(monday) {
   const sun = new Date(monday); sun.setDate(sun.getDate() + 6);
   const f = (d) => d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
@@ -64,7 +93,7 @@ const state = {
 };
 const weekKey = () => ymd(state.viewMonday);
 const myIndex = () => Math.max(0, (state.household?.members || []).indexOf(state.me));
-const myAssignment = () => BUNDLES[mod(myIndex() + weekIndexOf(state.viewMonday), 3)];
+const myAssignment = () => { const wi = weekIndexOf(state.viewMonday); return bundlesForIndex(wi)[mod(myIndex() + wi, 3)]; };
 
 // --- Data -------------------------------------------------------------------
 async function loadHousehold() {
@@ -97,12 +126,12 @@ async function loadStats() {
   for (const [wiStr, done] of Object.entries(byIdx)) {
     const wi = +wiStr;
     members.forEach((_, idx) => {
-      const b = BUNDLES[mod(idx + wi, 3)];
+      const b = bundlesForIndex(wi)[mod(idx + wi, 3)];
       xp[idx] += doneMins(done, b);
       if (bundleComplete(done, b)) weeks[idx] += 1;
     });
   }
-  const completedAt = (wi, idx) => byIdx[wi] && bundleComplete(byIdx[wi], BUNDLES[mod(idx + wi, 3)]);
+  const completedAt = (wi, idx) => byIdx[wi] && bundleComplete(byIdx[wi], bundlesForIndex(wi)[mod(idx + wi, 3)]);
   const cur = weekIndexOf(mondayOf(new Date()));
   members.forEach((_, idx) => {
     let wi = completedAt(cur, idx) ? cur : cur - 1, s = 0;

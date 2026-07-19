@@ -7,17 +7,25 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import webpush from "npm:web-push@3.6.7";
 
 // --- Chore bundles (kept in sync with the front-end) ------------------------
-const BUNDLES = [
+const SWITCH_FROM = "2026-07-20";   // first Monday the new zones apply
+const OLD_BUNDLES = [
   { id: "A", title: "Hoover + kitchen surfaces" },
   { id: "B", title: "Living room + corridor + kitchen scrub" },
   { id: "C", title: "Floors & wet" },
 ];
+const NEW_BUNDLES = [
+  { id: "A", title: "Hoover & living areas" },
+  { id: "B", title: "Upstairs washroom" },
+  { id: "C", title: "Kitchen" },
+];
+const bundlesFor = (mondayKey: string) => (mondayKey >= SWITCH_FROM ? NEW_BUNDLES : OLD_BUNDLES);
 
 // person i (0-based) does bundle (i + weekIndex) mod 3
-function assignmentsFor(weekIndex: number, members: string[]) {
+function assignmentsFor(weekIndex: number, members: string[], mondayKey: string) {
+  const B = bundlesFor(mondayKey);
   return members.map((name, i) => ({
     name,
-    bundle: BUNDLES[(((i + weekIndex) % 3) + 3) % 3],
+    bundle: B[(((i + weekIndex) % 3) + 3) % 3],
   }));
 }
 
@@ -106,8 +114,8 @@ Deno.serve(async () => {
       let title = "🧹 " + (h.name || "Chores");
       let body = "";
       if (k.kind === "chore") {
-        const { weekIndex } = weekInfo(now.y, now.m, now.d, h.anchor_monday);
-        const a = assignmentsFor(weekIndex, members);
+        const { weekIndex, weekKey } = weekInfo(now.y, now.m, now.d, h.anchor_monday);
+        const a = assignmentsFor(weekIndex, members, weekKey);
         title = "🧹 Chore day";
         body = a.map((x) => `${x.name}: ${x.bundle.title}`).join("\n");
       } else if (k.kind === "bins_out") {
