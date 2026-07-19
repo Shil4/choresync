@@ -44,7 +44,7 @@ const NEW_BUNDLES = [
     { n: "Washroom — sweep", m: 5 },
     { n: "Washroom — mop", m: 8 },
     { n: "Washroom — sink", m: 5 },
-    { n: "Bath / shower tub", m: 12 },
+    { n: "Bath / shower tub + wall tiles", m: 13 },
     { n: "Toilet", m: 6 } ] },
   { id: "C", title: "Kitchen", items: [
     { n: "Kitchen — sink", m: 6 },

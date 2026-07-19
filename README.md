@@ -13,10 +13,14 @@ and it's free.
 - **Reminders** are sent by a scheduled Supabase job (pg_cron → Edge Function →
   web push) at your custom days/times. Nothing runs on your computer.
 
-The chore split (≈31 min each):
-- **A — Hoover + kitchen surfaces:** hoover carpet, kitchen countertop, microwave
-- **B — Living room + corridor + kitchen scrub:** LR sweep, LR trash, corridor, kitchen sink, kitchen hob
-- **C — Floors & wet:** washroom sweep/mop/sink, kitchen sweep/mop
+The chore split — one zone each, ≈37 min per person:
+- **A — Hoover & living areas (37 min):** hoover carpet, LR sweep, LR trash, corridor
+- **B — Upstairs washroom (37 min):** sweep, mop, sink, bath/shower tub + wall tiles, toilet
+- **C — Kitchen (38 min):** sink, hob, countertop, microwave, sweep, mop
+
+These zones take effect from **Monday 20 July 2026**. Earlier weeks keep the previous
+split (30/31/32), so past ticks, XP and streaks stay accurate. The changeover date is
+the `SWITCH_FROM` constant at the top of `docs/app.js` and the Edge Function.
 
 Over any 3 weeks each person does A, B and C once, so it's even long-term.
 
@@ -56,7 +60,7 @@ npx supabase secrets set VAPID_PUBLIC_KEY=xxxx VAPID_PRIVATE_KEY=yyyy VAPID_SUBJ
    reminder is due.
 
 ### 5. Fill in the app config
-Open `public/config.js` and set:
+Open `config.js` (in `public/`, or `docs/` once renamed) and set:
 - `SUPABASE_URL` and `SUPABASE_ANON_KEY` (Dashboard → Project Settings → API → the **anon public** key)
 - `HOUSEHOLD_ID` (from step 1)
 - `VAPID_PUBLIC_KEY` (the **public** key from step 2)
@@ -95,8 +99,12 @@ That's it. Change names, days and times in **Settings**; everyone syncs.
   bit stricter than Android — if one doesn't arrive, reopen the app once.
 - **Test a reminder now:** in Settings set the chore reminder to today and a time
   a couple of minutes ahead; wait for the 5-minute cron tick.
-- **Change the split/times:** chore bundles live in `public/app.js` and the Edge
-  Function (`BUNDLES`); days/times are all editable in the app's Settings.
+- **Change the split/times:** chore bundles live in `docs/app.js` and the Edge
+  Function (`OLD_BUNDLES` / `NEW_BUNDLES`, plus `SWITCH_FROM` for when a change takes
+  effect). Days/times and names are all editable in the app's Settings.
+- **After editing bundles:** push the site *and* redeploy the function with
+  `npx supabase functions deploy send-reminders --no-verify-jwt`, since the reminder
+  text names the bundles too.
 - **Shared PIN:** set one in Settings to keep casual visitors out. It's a soft
   gate (fine for a private 3-person list), not bank-grade security — a determined
   technical user could bypass it. If you ever want real per-person logins, say the
