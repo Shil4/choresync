@@ -160,3 +160,8 @@ input[type=text],input[type=time],input[type=date],select.inp{
 .mwk{font-weight:800;font-size:14px}
 .mwl{margin:6px 0 0;padding-left:20px;color:var(--muted);font-size:14px}
 .mwl li{margin:3px 0}
+
+/* --- Read-only (non-current) weeks ---------------------------------------- */
+.robar{background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:14px;
+  padding:10px 12px;font-size:13px;font-weight:700;margin-bottom:14px}
+.ro .task,.ro .chip{opacity:.6;cursor:default;pointer-events:none}

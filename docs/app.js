@@ -93,6 +93,7 @@ const state = {
   stats: null, byIdx: {}, detail: null,
 };
 const weekKey = () => ymd(state.viewMonday);
+const isCurrentWeek = () => ymd(state.viewMonday) === ymd(mondayOf(new Date()));
 const myIndex = () => Math.max(0, (state.household?.members || []).indexOf(state.me));
 const myAssignment = () => { const wi = weekIndexOf(state.viewMonday); return bundlesForIndex(wi)[mod(myIndex() + wi, 3)]; };
 
@@ -191,6 +192,7 @@ function subscribeRealtime() {
 
 // --- Actions ----------------------------------------------------------------
 async function toggleDone(bId, idx) {
+  if (!isCurrentWeek()) return;
   const key = `${bId}:${idx}`;
   const wasComplete = bundleComplete(state.weekState.done, myAssignment());
   const done = { ...state.weekState.done };
@@ -201,6 +203,7 @@ async function toggleDone(bId, idx) {
   await persistWeek(); await loadStats(); render();
 }
 async function toggleCarry(key) {
+  if (!isCurrentWeek()) return;
   const done = { ...state.weekState.done };
   if (done[key]) delete done[key]; else done[key] = true;
   state.weekState = { ...state.weekState, done };
@@ -209,6 +212,7 @@ async function toggleCarry(key) {
   await persistWeek(); await loadStats(); render();
 }
 async function toggleVolunteer(kind, name) {
+  if (!isCurrentWeek()) return;
   const arr = [...(state.weekState[kind] || [])];
   const i = arr.indexOf(name);
   if (i >= 0) arr.splice(i, 1); else arr.push(name);
@@ -369,13 +373,17 @@ function renderHome() {
   const mine = all.find((a) => a.i === myIndex()) || all[0];
   const others = all.filter((a) => a !== mine);
   const notes = holderNotes(wi);
-  view.innerHTML =
+  const ro = !isCurrentWeek();
+  const banner = ro ? `<div class="robar">👁️ ${state.viewMonday > mondayOf(new Date()) ? "Future" : "Past"} week — view only. You can only tick chores during their own week.</div>` : "";
+  view.innerHTML = banner +
     carryCard(wi) +
     missionCard(mine, notes) +
     `<div class="section-title">Housemates</div><div class="card">${others.map((o) => miniCard(o, notes)).join("")}</div>` +
     `<div class="section-title">Bins</div><div class="card">
       ${binBlock("bins_out", "Take the bins out", h.bins_out_day, h.bins_out_time)}
       ${binBlock("bins_in", "Bring the bins in", h.bins_in_day, h.bins_in_time)}</div>`;
+  if (ro) { view.classList.add("ro"); return; }
+  view.classList.remove("ro");
   view.querySelectorAll(".task[data-b]").forEach((t) => t.onclick = () => toggleDone(t.dataset.b, +t.dataset.i));
   view.querySelectorAll(".task[data-co]").forEach((t) => t.onclick = () => toggleCarry(t.dataset.co));
   view.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
@@ -396,10 +404,13 @@ function renderRanks() {
       <div class="rank">${medal[rank] || rank + 1}</div>
       <div class="info"><div class="n">${esc(r.name)} <span class="lvl" style="background:${PCOL[r.i]}">Lv ${r.lvl}</span></div>
         <div class="meta">${r.weeks} week${r.weeks === 1 ? "" : "s"} completed${r.streak ? ` · 🔥 ${r.streak}` : ""}</div>
-        <div class="flags">
-          ${r.risk ? `<span class="flag risk">⚠️ ${r.risk} overdue</span>` : ""}
-          ${r.missed ? `<span class="flag miss" data-p="${r.i}">⚠️ ${r.missed} missed week${r.missed === 1 ? "" : "s"} ›</span>` : `<span class="flag clean">clean record</span>`}
-        </div>
+        <div class="flags">${(() => {
+          const f = [];
+          if (r.risk) f.push(`<span class="flag risk">⚠️ ${r.risk} overdue — at risk</span>`);
+          if (r.missed) f.push(`<span class="flag miss" data-p="${r.i}">⚠️ ${r.missed} missed week${r.missed === 1 ? "" : "s"} ›</span>`);
+          if (!r.risk && !r.missed) f.push(`<span class="flag clean">clean record</span>`);
+          return f.join("");
+        })()}</div>
         <div class="xpbar"><span style="width:${r.xp % 100}%"></span></div></div>
       <div class="total">${r.xp}<small>XP</small></div></div>`).join("");
   view.innerHTML = `<div class="section-title">Leaderboard — this season</div><div class="card">${body}</div>
