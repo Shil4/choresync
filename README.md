@@ -94,11 +94,33 @@ That's it. Change names, days and times in **Settings**; everyone syncs.
 
 ---
 
+## Carry-over & missed weeks
+
+Unfinished chores follow the **person**, not the bundle. On Monday, anything you
+left unticked last week appears on your Home screen under *"Carried over from last
+week"*, with a *clear by <catch-up day>* target. They earn **half XP**. Whoever holds
+that area this week sees a note (matched by chore name, so it still works after the
+bundles were restructured) and still does their own pass as normal.
+
+While carry-over is outstanding you show an **at-risk** flag. Clear it any time during
+the grace week and nothing goes on your record. Leave it past the grace week and the
+chores are written off and that week is logged as **missed** — shown on the leaderboard
+over a rolling 8-week window, tappable to see which weeks and which chores.
+
+An **overdue nudge** goes out early in the week to *only* the people who owe something.
+Catch-up day and nudge day/time are configurable in Settings.
+
+Setup: run `supabase/carryover.sql` once, then redeploy the function.
+
 ## Notes & troubleshooting
 - **iPhone reminders** only work after "Add to Home Screen" (iOS rule) and are a
   bit stricter than Android — if one doesn't arrive, reopen the app once.
 - **Test a reminder now:** in Settings set the chore reminder to today and a time
-  a couple of minutes ahead; wait for the 5-minute cron tick.
+  a couple of minutes ahead; wait for the 5-minute cron tick. Reminders de-dupe on
+  date + kind + *time*, so moving the time later the same day fires again.
+- **Nothing arrived?** Check `select * from net._http_response order by created desc`
+  — `"sent":1` means the push service accepted it, so any failure is on the device
+  (on Android, exempt Chrome from battery optimisation to stop delivery being delayed).
 - **Change the split/times:** chore bundles live in `docs/app.js` and the Edge
   Function (`OLD_BUNDLES` / `NEW_BUNDLES`, plus `SWITCH_FROM` for when a change takes
   effect). Days/times and names are all editable in the app's Settings.

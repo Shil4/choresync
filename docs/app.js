@@ -58,6 +58,7 @@ const bundlesFor = (monday) => (ymd(monday) >= SWITCH_FROM ? NEW_BUNDLES : OLD_B
 const bundleColor = { A: "var(--A)", B: "var(--B)", C: "var(--C)" };
 const PCOL = ["#6366f1", "#f43f5e", "#10b981"];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MISS_WINDOW = 8;   // rolling window for the missed-week tally
 const mod = (n, m) => (((n % m) + m) % m);
 const bundleMins = (b) => b.items.reduce((s, i) => s + i.m, 0);
 const doneCount = (done, b) => b.items.filter((_, i) => done[`${b.id}:${i}`]).length;
@@ -89,11 +90,39 @@ const state = {
   viewMonday: mondayOf(new Date()),
   weekState: { done: {}, bins_out: [], bins_in: [] },
   me: localStorage.getItem("choresync_me") || "",
-  stats: null,
+  stats: null, byIdx: {}, detail: null,
 };
 const weekKey = () => ymd(state.viewMonday);
 const myIndex = () => Math.max(0, (state.household?.members || []).indexOf(state.me));
 const myAssignment = () => { const wi = weekIndexOf(state.viewMonday); return bundlesForIndex(wi)[mod(myIndex() + wi, 3)]; };
+
+
+// --- Carry-over -------------------------------------------------------------
+// Unfinished chores follow the PERSON into the next week (not the bundle).
+// Stored under a "co:" key namespace so they never collide with the current
+// holder's identical chore in the same week.
+const catchupDay = () => state.household?.catchup_day ?? 3;
+function carryPure(wi, p, byIdx) {
+  const prev = byIdx[wi - 1]; if (!prev) return [];
+  const b = bundlesForIndex(wi - 1)[mod(p + wi - 1, 3)];
+  const out = [];
+  b.items.forEach((it, i) => { if (!prev[`${b.id}:${i}`]) out.push({ n: it.n, m: it.m, key: `co:${b.id}:${i}` }); });
+  return out;
+}
+const carryOpen = (wi, p) => carryPure(wi, p, state.byIdx).filter((c) => !(state.byIdx[wi] || {})[c.key]);
+// Match by chore NAME, because bundles were restructured and most chores moved.
+function holderNotes(wi) {
+  const notes = {}, members = state.household.members || [], B = bundlesForIndex(wi);
+  members.forEach((name, p) => carryOpen(wi, p).forEach((c) => {
+    B.forEach((b, bi) => {
+      if (b.items.some((x) => x.n === c.n)) {
+        const q = mod(bi - wi, 3);
+        if (q !== p) (notes[q] = notes[q] || []).push({ owner: name, chore: c.n });
+      }
+    });
+  }));
+  return notes;
+}
 
 // --- Data -------------------------------------------------------------------
 async function loadHousehold() {
@@ -117,28 +146,39 @@ async function persistWeek() {
 async function loadStats() {
   const members = state.household?.members || [];
   const { data } = await sb.from("week_state").select("week_key,done").eq("household_id", HID);
-  const byIdx = {};                       // weekIndex -> done map
-  for (const r of data || []) {
-    const wi = weekIndexOf(mondayOf(new Date(r.week_key + "T00:00:00")));
-    byIdx[wi] = r.done || {};
-  }
+  const byIdx = {};
+  for (const r of data || []) byIdx[weekIndexOf(mondayOf(new Date(r.week_key + "T00:00:00")))] = r.done || {};
+  byIdx[weekIndexOf(state.viewMonday)] = state.weekState.done;   // live overlay
+  state.byIdx = byIdx;
+
   const xp = members.map(() => 0), weeks = members.map(() => 0), streak = members.map(() => 0);
-  for (const [wiStr, done] of Object.entries(byIdx)) {
-    const wi = +wiStr;
-    members.forEach((_, idx) => {
-      const b = bundlesForIndex(wi)[mod(idx + wi, 3)];
-      xp[idx] += doneMins(done, b);
-      if (bundleComplete(done, b)) weeks[idx] += 1;
+  for (const [k, done] of Object.entries(byIdx)) {
+    const wi = +k;
+    members.forEach((_, p) => {
+      const b = bundlesForIndex(wi)[mod(p + wi, 3)];
+      xp[p] += doneMins(done, b);
+      if (bundleComplete(done, b)) weeks[p] += 1;
+      carryPure(wi, p, byIdx).forEach((c) => { if (done[c.key]) xp[p] += Math.floor(c.m / 2); }); // half XP, late
     });
   }
-  const completedAt = (wi, idx) => byIdx[wi] && bundleComplete(byIdx[wi], bundlesForIndex(wi)[mod(idx + wi, 3)]);
+  const completedAt = (wi, p) => byIdx[wi] && bundleComplete(byIdx[wi], bundlesForIndex(wi)[mod(p + wi, 3)]);
   const cur = weekIndexOf(mondayOf(new Date()));
-  members.forEach((_, idx) => {
-    let wi = completedAt(cur, idx) ? cur : cur - 1, s = 0;
-    while (completedAt(wi, idx)) { s++; wi--; }
-    streak[idx] = s;
+  members.forEach((_, p) => { let wi = completedAt(cur, p) ? cur : cur - 1, s = 0; while (completedAt(wi, p)) { s++; wi--; } streak[p] = s; });
+
+  // A week counts as missed only once its grace week has also ended.
+  const missed = members.map((_, p) => {
+    const res = [];
+    for (let wi = cur - MISS_WINDOW; wi <= cur - 2; wi++) {
+      const src = byIdx[wi]; if (!src) continue;              // week never used -> not a miss
+      const grace = byIdx[wi + 1] || {};
+      const b = bundlesForIndex(wi)[mod(p + wi, 3)], un = [];
+      b.items.forEach((it, i) => { if (!src[`${b.id}:${i}`] && !grace[`co:${b.id}:${i}`]) un.push(it.n); });
+      if (un.length) res.push({ weekKey: ymd(mondayFromIndex(wi)), chores: un });
+    }
+    return res;
   });
-  state.stats = { xp, weeks, streak, level: xp.map((v) => Math.floor(v / 100) + 1) };
+  const atRisk = members.map((_, p) => carryPure(cur, p, byIdx).filter((c) => !(byIdx[cur] || {})[c.key]).length);
+  state.stats = { xp, weeks, streak, level: xp.map((v) => Math.floor(v / 100) + 1), missed, atRisk };
 }
 function subscribeRealtime() {
   sb.channel("choresync")
@@ -160,6 +200,14 @@ async function toggleDone(bId, idx) {
   if (!wasComplete && bundleComplete(done, myAssignment())) burstConfetti();
   await persistWeek(); await loadStats(); render();
 }
+async function toggleCarry(key) {
+  const done = { ...state.weekState.done };
+  if (done[key]) delete done[key]; else done[key] = true;
+  state.weekState = { ...state.weekState, done };
+  render();
+  if (!carryOpen(weekIndexOf(state.viewMonday), myIndex()).length) burstConfetti();
+  await persistWeek(); await loadStats(); render();
+}
 async function toggleVolunteer(kind, name) {
   const arr = [...(state.weekState[kind] || [])];
   const i = arr.indexOf(name);
@@ -176,6 +224,7 @@ async function saveSettings(f) {
     reminder_day: +f.rday.value, reminder_time: f.rtime.value,
     bins_out_day: +f.boday.value, bins_out_time: f.botime.value,
     bins_in_day: +f.biday.value, bins_in_time: f.bitime.value,
+    catchup_day: +f.cday.value, nudge_day: +f.nday.value, nudge_time: f.ntime.value,
     pin: f.pin.value.trim(), updated_at: new Date().toISOString(),
   };
   await sb.from("household").update(patch).eq("id", HID);
@@ -247,7 +296,29 @@ function renderHero() {
 }
 async function shiftWeek(d) { const x = new Date(state.viewMonday); x.setDate(x.getDate() + d); state.viewMonday = mondayOf(x); await loadWeek(); render(); }
 
-function missionCard(a) {
+function carryCard(wi) {
+  const p = myIndex();
+  const all = carryPure(wi, p, state.byIdx);
+  if (!all.length) return "";
+  const open = all.filter((c) => !state.weekState.done[c.key]);
+  const rows = all.map((c) => {
+    const on = !!state.weekState.done[c.key];
+    return `<div class="task ${on ? "done" : ""}" data-co="${esc(c.key)}">
+      <div class="box">${on ? "✓" : ""}</div><div class="t">${esc(c.n)}</div>
+      <div class="xp">+${Math.floor(c.m / 2)}</div></div>`;
+  }).join("");
+  const cleared = open.length === 0;
+  return `<div class="card carry ${cleared ? "ok" : ""}">
+    <div class="carryhead"><span class="ci">${cleared ? "✅" : "⚠️"}</span>
+      <div><div class="ct">${cleared ? "Carry-over cleared" : `Carried over from last week · ${open.length} left`}</div>
+      <div class="cw">${cleared ? "Nothing goes on your record." : `Clear by ${DAYS[catchupDay()]} · half XP`}</div></div></div>
+    <div class="tasks">${rows}</div></div>`;
+}
+function noteLines(notes, i) {
+  return (notes[i] || []).map((n) =>
+    `<div class="note">${esc(n.owner)} is clearing last week's <b>${esc(n.chore)}</b> by ${DAYS[catchupDay()]}</div>`).join("");
+}
+function missionCard(a, notes) {
   const done = state.weekState.done, color = PCOL[a.i];
   const pct = doneCount(done, a.bundle) / a.bundle.items.length;
   const st = state.stats?.streak[a.i] || 0;
@@ -268,16 +339,18 @@ function missionCard(a) {
     </div>
     <div class="tasks">${items}</div>
     ${complete ? `<div class="donebanner">🎉 All done — +${bundleMins(a.bundle)} XP earned!</div>` : ""}
+    ${noteLines(notes, a.i)}
   </div>`;
 }
-function miniCard(a) {
+function miniCard(a, notes) {
   const done = state.weekState.done, color = PCOL[a.i];
   const c = doneCount(done, a.bundle), tot = a.bundle.items.length, pct = Math.round((c / tot) * 100);
   return `<div class="mini">
     <div class="avatar" style="background:${color}">${esc(initials(a.name))}</div>
-    <div class="info"><div class="n">${esc(a.name)}</div>
+    <div class="info"><div class="n">${esc(a.name)}${(() => { const od = carryOpen(weekIndexOf(state.viewMonday), a.i).length; return od ? `<span class="od">⚠️ ${od} overdue</span>` : ""; })()}</div>
       <div class="b"><span class="dot" style="background:${bundleColor[a.bundle.id]}"></span> Bundle ${a.bundle.id} · ${a.bundle.title}</div>
-      <div class="bar"><span style="width:${pct}%;background:${color}"></span></div></div>
+      <div class="bar"><span style="width:${pct}%;background:${color}"></span></div>
+      ${noteLines(notes, a.i)}</div>
     <div class="mp">${c}/${tot}</div></div>`;
 }
 function binBlock(kind, label, day, time) {
@@ -295,13 +368,16 @@ function renderHome() {
   const all = assignmentsFor(wi, h.members);
   const mine = all.find((a) => a.i === myIndex()) || all[0];
   const others = all.filter((a) => a !== mine);
+  const notes = holderNotes(wi);
   view.innerHTML =
-    missionCard(mine) +
-    `<div class="section-title">Housemates</div><div class="card">${others.map(miniCard).join("")}</div>` +
+    carryCard(wi) +
+    missionCard(mine, notes) +
+    `<div class="section-title">Housemates</div><div class="card">${others.map((o) => miniCard(o, notes)).join("")}</div>` +
     `<div class="section-title">Bins</div><div class="card">
       ${binBlock("bins_out", "Take the bins out", h.bins_out_day, h.bins_out_time)}
       ${binBlock("bins_in", "Bring the bins in", h.bins_in_day, h.bins_in_time)}</div>`;
-  view.querySelectorAll(".task").forEach((t) => t.onclick = () => toggleDone(t.dataset.b, +t.dataset.i));
+  view.querySelectorAll(".task[data-b]").forEach((t) => t.onclick = () => toggleDone(t.dataset.b, +t.dataset.i));
+  view.querySelectorAll(".task[data-co]").forEach((t) => t.onclick = () => toggleCarry(t.dataset.co));
   view.querySelectorAll(".chip").forEach((c) => c.onclick = () => {
     if (c.dataset.m !== state.me) { state.me = c.dataset.m; localStorage.setItem("choresync_me", state.me); renderHero(); }
     toggleVolunteer(c.dataset.kind, c.dataset.m);
@@ -310,23 +386,41 @@ function renderHome() {
 
 function renderRanks() {
   const h = state.household, s = state.stats;
+  if (state.detail !== null) return renderMissedDetail(state.detail);
   const rows = (h.members || []).map((name, i) => ({
     name, i, xp: s.xp[i], lvl: s.level[i], weeks: s.weeks[i], streak: s.streak[i],
+    missed: (s.missed[i] || []).length, risk: s.atRisk[i] || 0,
   })).sort((a, b) => b.xp - a.xp);
   const medal = ["🥇", "🥈", "🥉"];
-  const body = rows.map((r, rank) => {
-    const into = r.xp % 100;
-    return `<div class="lb">
+  const body = rows.map((r, rank) => `<div class="lb">
       <div class="rank">${medal[rank] || rank + 1}</div>
       <div class="info"><div class="n">${esc(r.name)} <span class="lvl" style="background:${PCOL[r.i]}">Lv ${r.lvl}</span></div>
         <div class="meta">${r.weeks} week${r.weeks === 1 ? "" : "s"} completed${r.streak ? ` · 🔥 ${r.streak}` : ""}</div>
-        <div class="xpbar"><span style="width:${into}%"></span></div></div>
-      <div class="total">${r.xp}<small>XP</small></div></div>`;
-  }).join("");
+        <div class="flags">
+          ${r.risk ? `<span class="flag risk">⚠️ ${r.risk} overdue</span>` : ""}
+          ${r.missed ? `<span class="flag miss" data-p="${r.i}">⚠️ ${r.missed} missed week${r.missed === 1 ? "" : "s"} ›</span>` : `<span class="flag clean">clean record</span>`}
+        </div>
+        <div class="xpbar"><span style="width:${r.xp % 100}%"></span></div></div>
+      <div class="total">${r.xp}<small>XP</small></div></div>`).join("");
   view.innerHTML = `<div class="section-title">Leaderboard — this season</div><div class="card">${body}</div>
     <div class="card" style="color:var(--muted);font-size:14px">
-      Earn <b>XP</b> by ticking off your chores — 1 minute of cleaning = 1 XP.
-      Finish your whole bundle to keep your 🔥 streak alive. Every 100 XP is a new level.</div>`;
+      Earn <b>XP</b> by ticking off chores — 1 minute = 1 XP, half for late catch-up.
+      Finish your bundle to keep your 🔥 streak. Unfinished chores carry into next week;
+      leave them past the grace week and it's logged as a missed week (last ${MISS_WINDOW} weeks shown).</div>`;
+  view.querySelectorAll(".flag.miss").forEach((f) => f.onclick = () => { state.detail = +f.dataset.p; render(); });
+}
+function renderMissedDetail(p) {
+  const name = (state.household.members || [])[p] || "";
+  const list = state.stats.missed[p] || [];
+  const body = list.length ? list.map((w) => {
+    const d = new Date(w.weekKey + "T00:00:00");
+    return `<div class="mw"><div class="mwk">Week of ${d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</div>
+      <ul class="mwl">${w.chores.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></div>`;
+  }).join("") : `<div style="color:var(--muted)">No missed weeks — spotless. ✨</div>`;
+  view.innerHTML = `<button class="btn secondary" id="back">‹ Back to leaderboard</button>
+    <div class="section-title" style="margin-top:14px">${esc(name)} — missed weeks</div>
+    <div class="card">${body}</div>`;
+  document.getElementById("back").onclick = () => { state.detail = null; render(); };
 }
 
 function daySel(id, v) { return `<select class="inp" name="${id}">${DAYS.map((d, i) => `<option value="${i}"${i === v ? " selected" : ""}>${d}</option>`).join("")}</select>`; }
@@ -351,6 +445,8 @@ function renderSettings() {
       <div class="field"><label>Chore day &amp; time</label><div class="row2">${daySel("rday", h.reminder_day)}<input type="time" name="rtime" value="${h.reminder_time}"></div></div>
       <div class="field"><label>Bins out</label><div class="row2">${daySel("boday", h.bins_out_day)}<input type="time" name="botime" value="${h.bins_out_time}"></div></div>
       <div class="field"><label>Bins in</label><div class="row2">${daySel("biday", h.bins_in_day)}<input type="time" name="bitime" value="${h.bins_in_time}"></div></div>
+      <div class="field"><label>Catch-up deadline (carried-over chores)</label>${daySel("cday", h.catchup_day ?? 3)}</div>
+      <div class="field"><label>Overdue nudge (only to those who owe)</label><div class="row2">${daySel("nday", h.nudge_day ?? 1)}<input type="time" name="ntime" value="${h.nudge_time || "18:00"}"></div></div>
     </div>
     <button type="submit" class="btn">Save settings</button>
     <button type="button" id="notifyBtn" class="btn secondary">🔔 Turn on reminders for this device</button>
@@ -395,7 +491,7 @@ function burstConfetti() {
 }
 
 // --- Boot -------------------------------------------------------------------
-document.querySelectorAll(".tab").forEach((t) => t.onclick = () => { state.tab = t.dataset.tab; render(); });
+document.querySelectorAll(".tab").forEach((t) => t.onclick = () => { state.tab = t.dataset.tab; state.detail = null; render(); });
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 (async () => {
   if (!configured) { render(); return; }
