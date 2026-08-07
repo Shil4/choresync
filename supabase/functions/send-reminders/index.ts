@@ -65,7 +65,7 @@ function thursdayKey(mondayKey: string) {
 }
 function offDuty(away: Record<string, {from:string;to:string}[]>, name: string, mondayKey: string) {
   const T = thursdayKey(mondayKey);
-  return (away?.[name] || []).some((r) => r.from <= T && T <= r.to && r.from !== T);
+  return (away?.[name] || []).some((r) => r.from <= T && T <= r.to);
 }
 
 Deno.serve(async () => {

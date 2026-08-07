@@ -100,9 +100,10 @@ const thursdayKey = (monday) => { const t = new Date(monday); t.setDate(t.getDat
 function offDutyName(name, monday) {
   const ranges = (state.household?.away || {})[name] || [];
   const T = thursdayKey(monday);
-  return ranges.some((r) => r.from <= T && T <= r.to && r.from !== T);
+  return ranges.some((r) => r.from <= T && T <= r.to);
 }
 const offDutyIdx = (p, wi) => offDutyName((state.household?.members || [])[p], mondayFromIndex(wi));
+const viewIsFuture = () => ymd(state.viewMonday) > ymd(mondayOf(new Date()));
 
 
 // --- Carry-over -------------------------------------------------------------
@@ -118,9 +119,10 @@ function carryPure(wi, p, byIdx) {
   b.items.forEach((it, i) => { if (!prev[`${b.id}:${i}`]) out.push({ n: it.n, m: it.m, key: `co:${b.id}:${i}` }); });
   return out;
 }
-const carryOpen = (wi, p) => carryPure(wi, p, state.byIdx).filter((c) => !(state.byIdx[wi] || {})[c.key]);
+const carryOpen = (wi, p) => viewIsFuture() ? [] : carryPure(wi, p, state.byIdx).filter((c) => !(state.byIdx[wi] || {})[c.key]);
 // Match by chore NAME, because bundles were restructured and most chores moved.
 function holderNotes(wi) {
+  if (viewIsFuture()) return {};
   const notes = {}, members = state.household.members || [], B = bundlesForIndex(wi);
   members.forEach((name, p) => carryOpen(wi, p).forEach((c) => {
     B.forEach((b, bi) => {
@@ -319,6 +321,7 @@ function renderHero() {
 async function shiftWeek(d) { const x = new Date(state.viewMonday); x.setDate(x.getDate() + d); state.viewMonday = mondayOf(x); await loadWeek(); render(); }
 
 function carryCard(wi) {
+  if (viewIsFuture()) return "";
   const p = myIndex();
   const all = carryPure(wi, p, state.byIdx);
   if (!all.length) return "";
@@ -395,8 +398,10 @@ function miniCard(a, notes) {
 }
 function binBlock(kind, label, day, time) {
   const chosen = state.weekState[kind] || [];
-  const chips = (state.household.members || []).map((m) =>
-    `<button class="chip ${chosen.includes(m) ? "on" : ""}" data-kind="${kind}" data-m="${esc(m)}">${chosen.includes(m) ? "⭐ " : ""}${esc(m)}</button>`).join("");
+  const avail = (state.household.members || []).filter((m) => !offDutyName(m, state.viewMonday));
+  const chips = avail.map((m) =>
+    `<button class="chip ${chosen.includes(m) ? "on" : ""}" data-kind="${kind}" data-m="${esc(m)}">${chosen.includes(m) ? "⭐ " : ""}${esc(m)}</button>`).join("")
+    + (avail.length < (state.household.members || []).length ? `<span class="binaway">✈️ away hidden</span>` : "");
   return `<div class="binrow"><div class="ico">🗑️</div><div class="bmeta">
     <div class="bt">${label}</div><div class="bwhen">${DAYS[day]} · ${time}</div>
     <div class="chips">${chips}</div>
@@ -519,7 +524,7 @@ function renderSettings() {
     </div>
     <div class="section-title">Away from home</div>
     <div class="card">
-      <div class="hint" style="margin-bottom:10px">Add the dates you're away. Any week you're not home for its <b>Thursday</b> (the chore day) is skipped for you — no chores, no penalty. Leaving on Thursday still counts as done.</div>
+      <div class="hint" style="margin-bottom:10px">Enter the dates you're <b>not home</b> — the first and last day away, not your travel days (you're home on those). Any week you're not home for its <b>Thursday</b> (the chore day) is skipped for you — no chores, no penalty.</div>
       <div id="awayList">${awayListHTML(h)}</div>
       <div class="field"><label>Who</label>${awayWhoSelect(h)}</div>
       <div class="row2">
