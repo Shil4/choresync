@@ -96,6 +96,13 @@ const weekKey = () => ymd(state.viewMonday);
 const isCurrentWeek = () => ymd(state.viewMonday) === ymd(mondayOf(new Date()));
 const myIndex = () => Math.max(0, (state.household?.members || []).indexOf(state.me));
 const myAssignment = () => { const wi = weekIndexOf(state.viewMonday); return bundlesForIndex(wi)[mod(myIndex() + wi, 3)]; };
+const thursdayKey = (monday) => { const t = new Date(monday); t.setDate(t.getDate() + 3); return ymd(t); };
+function offDutyName(name, monday) {
+  const ranges = (state.household?.away || {})[name] || [];
+  const T = thursdayKey(monday);
+  return ranges.some((r) => r.from <= T && T <= r.to && r.from !== T);
+}
+const offDutyIdx = (p, wi) => offDutyName((state.household?.members || [])[p], mondayFromIndex(wi));
 
 
 // --- Carry-over -------------------------------------------------------------
@@ -105,6 +112,7 @@ const myAssignment = () => { const wi = weekIndexOf(state.viewMonday); return bu
 const catchupDay = () => state.household?.catchup_day ?? 3;
 function carryPure(wi, p, byIdx) {
   const prev = byIdx[wi - 1]; if (!prev) return [];
+  if (offDutyIdx(p, wi - 1)) return [];   // away last week -> excused, nothing carries
   const b = bundlesForIndex(wi - 1)[mod(p + wi - 1, 3)];
   const out = [];
   b.items.forEach((it, i) => { if (!prev[`${b.id}:${i}`]) out.push({ n: it.n, m: it.m, key: `co:${b.id}:${i}` }); });
@@ -164,13 +172,23 @@ async function loadStats() {
   }
   const completedAt = (wi, p) => byIdx[wi] && bundleComplete(byIdx[wi], bundlesForIndex(wi)[mod(p + wi, 3)]);
   const cur = weekIndexOf(mondayOf(new Date()));
-  members.forEach((_, p) => { let wi = completedAt(cur, p) ? cur : cur - 1, s = 0; while (completedAt(wi, p)) { s++; wi--; } streak[p] = s; });
+  members.forEach((_, p) => {
+    let wi = cur, s = 0;
+    if (!completedAt(cur, p) && !offDutyIdx(p, cur)) wi = cur - 1;   // current incomplete (and present) -> start from last week
+    while (true) {
+      if (byIdx[wi] === undefined && !offDutyIdx(p, wi)) break;      // no data and not away -> stop
+      if (offDutyIdx(p, wi)) { wi--; continue; }                     // away week -> bridge, neither count nor break
+      if (completedAt(wi, p)) { s++; wi--; } else break;
+    }
+    streak[p] = s;
+  });
 
   // A week counts as missed only once its grace week has also ended.
   const missed = members.map((_, p) => {
     const res = [];
     for (let wi = cur - MISS_WINDOW; wi <= cur - 2; wi++) {
       const src = byIdx[wi]; if (!src) continue;              // week never used -> not a miss
+      if (offDutyIdx(p, wi)) continue;                       // away -> excused, not missed
       const grace = byIdx[wi + 1] || {};
       const b = bundlesForIndex(wi)[mod(p + wi, 3)], un = [];
       b.items.forEach((it, i) => { if (!src[`${b.id}:${i}`] && !grace[`co:${b.id}:${i}`]) un.push(it.n); });
@@ -324,6 +342,17 @@ function noteLines(notes, i) {
 }
 function missionCard(a, notes) {
   const done = state.weekState.done, color = PCOL[a.i];
+  const away = offDutyName(a.name, state.viewMonday);
+  const anyTicked = a.bundle.items.some((_, i) => done[`${a.bundle.id}:${i}`]);
+  if (away && !anyTicked) {
+    return `<div class="card mission me" style="--accent:${color}">
+      <div class="flag">AWAY</div>
+      <div class="phead"><div class="avatar" style="background:${color}">${esc(initials(a.name))}</div>
+        <div><div class="pname">${esc(a.name)}</div>
+          <div class="pbundle" style="color:var(--muted)">✈️ Away this week — no chores</div></div></div>
+      <div class="awaynote">Bundle ${a.bundle.id} (${esc(a.bundle.title)}) is unassigned this week. It'll be cleaned next week as the rotation moves on.</div>
+      ${noteLines(notes, a.i)}</div>`;
+  }
   const pct = doneCount(done, a.bundle) / a.bundle.items.length;
   const st = state.stats?.streak[a.i] || 0;
   const items = a.bundle.items.map((it, idx) => {
@@ -332,6 +361,7 @@ function missionCard(a, notes) {
       <div class="box">${on ? "✓" : ""}</div><div class="t">${esc(it.n)}</div><div class="xp">+${it.m}</div></div>`;
   }).join("");
   const complete = bundleComplete(done, a.bundle);
+  const awayOpt = away ? `<div class="awaynote">You're marked away this week — these are optional and nothing's owed.</div>` : "";
   return `<div class="card mission me" style="--accent:${color}">
     <div class="flag">YOUR MISSION</div>
     <div class="phead">
@@ -341,13 +371,19 @@ function missionCard(a, notes) {
         ${st ? `<div class="streak">🔥 ${st}-week streak</div>` : ""}</div>
       ${ring(pct, color)}
     </div>
-    <div class="tasks">${items}</div>
+    ${awayOpt}<div class="tasks">${items}</div>
     ${complete ? `<div class="donebanner">🎉 All done — +${bundleMins(a.bundle)} XP earned!</div>` : ""}
     ${noteLines(notes, a.i)}
   </div>`;
 }
 function miniCard(a, notes) {
   const done = state.weekState.done, color = PCOL[a.i];
+  if (offDutyName(a.name, state.viewMonday) && !a.bundle.items.some((_, i) => done[`${a.bundle.id}:${i}`])) {
+    return `<div class="mini"><div class="avatar" style="background:${color};opacity:.6">${esc(initials(a.name))}</div>
+      <div class="info"><div class="n">${esc(a.name)} <span class="awaytag">✈️ Away</span></div>
+        <div class="b">Bundle ${a.bundle.id} · unassigned this week</div></div>
+      <div class="mp">—</div></div>`;
+  }
   const c = doneCount(done, a.bundle), tot = a.bundle.items.length, pct = Math.round((c / tot) * 100);
   return `<div class="mini">
     <div class="avatar" style="background:${color}">${esc(initials(a.name))}</div>
@@ -435,6 +471,41 @@ function renderMissedDetail(p) {
 }
 
 function daySel(id, v) { return `<select class="inp" name="${id}">${DAYS.map((d, i) => `<option value="${i}"${i === v ? " selected" : ""}>${d}</option>`).join("")}</select>`; }
+function awayWhoSelect(h) {
+  return `<select class="inp" id="awayWho">${(h.members || []).map((m, i) => `<option value="${i}"${m === state.me ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
+}
+function fmtD(s) { return new Date(s + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); }
+function awayListHTML(h) {
+  const away = h.away || {}, rows = [];
+  (h.members || []).forEach((m) => (away[m] || []).forEach((r, i) =>
+    rows.push(`<div class="awayrow"><span>✈️ <b>${esc(m)}</b> · ${fmtD(r.from)} → ${fmtD(r.to)}</span>
+      <button type="button" class="rm" data-m="${esc(m)}" data-i="${i}">✕</button></div>`)));
+  return rows.length ? rows.join("") : `<div class="hint" style="margin-bottom:10px">No away periods set.</div>`;
+}
+async function saveAway(away) {
+  state.household = { ...state.household, away };
+  await sb.from("household").update({ away, updated_at: new Date().toISOString() }).eq("id", HID);
+  await loadStats(); render();
+}
+function wireAway() {
+  const add = document.getElementById("addAway");
+  if (add) add.onclick = async () => {
+    const who = (state.household.members || [])[+document.getElementById("awayWho").value];
+    const from = document.getElementById("awayFrom").value, to = document.getElementById("awayTo").value;
+    if (!from || !to) { alert("Pick both a From and a To date."); return; }
+    if (to < from) { alert("The To date can't be before the From date."); return; }
+    const away = JSON.parse(JSON.stringify(state.household.away || {}));
+    (away[who] = away[who] || []).push({ from, to });
+    away[who].sort((x, y) => x.from.localeCompare(y.from));
+    saveAway(away);
+  };
+  document.querySelectorAll("#awayList .rm").forEach((b) => b.onclick = () => {
+    const away = JSON.parse(JSON.stringify(state.household.away || {}));
+    (away[b.dataset.m] || []).splice(+b.dataset.i, 1);
+    if (!away[b.dataset.m].length) delete away[b.dataset.m];
+    saveAway(away);
+  });
+}
 function renderSettings() {
   const h = state.household, m = h.members || [];
   view.innerHTML = `<form id="settings">
@@ -445,6 +516,17 @@ function renderSettings() {
       <div class="field"><label>Person 2</label><input type="text" name="m1" value="${esc(m[1] || "")}"></div>
       <div class="field"><label>Person 3</label><input type="text" name="m2" value="${esc(m[2] || "")}"></div>
       <div class="field"><label>Shared PIN (blank = off)</label><input type="text" inputmode="numeric" name="pin" value="${esc(h.pin || "")}"></div>
+    </div>
+    <div class="section-title">Away from home</div>
+    <div class="card">
+      <div class="hint" style="margin-bottom:10px">Add the dates you're away. Any week you're not home for its <b>Thursday</b> (the chore day) is skipped for you — no chores, no penalty. Leaving on Thursday still counts as done.</div>
+      <div id="awayList">${awayListHTML(h)}</div>
+      <div class="field"><label>Who</label>${awayWhoSelect(h)}</div>
+      <div class="row2">
+        <div class="field"><label>From</label><input type="date" id="awayFrom"></div>
+        <div class="field"><label>To</label><input type="date" id="awayTo"></div>
+      </div>
+      <button type="button" id="addAway" class="btn secondary">＋ Add away period</button>
     </div>
     <div class="section-title">Rotation</div>
     <div class="card">
@@ -466,6 +548,7 @@ function renderSettings() {
   const f = document.getElementById("settings");
   f.onsubmit = (e) => { e.preventDefault(); saveSettings(f); };
   document.getElementById("notifyBtn").onclick = enableNotifications;
+  wireAway();
 }
 
 function render() {

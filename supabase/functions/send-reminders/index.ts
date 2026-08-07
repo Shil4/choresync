@@ -59,6 +59,14 @@ function weekInfo(y: number, m: number, d: number, anchorMonday: string) {
     weekIndex: Math.round((monday.getTime() - anchor.getTime()) / (7 * 864e5)) };
 }
 const toMinutes = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+function thursdayKey(mondayKey: string) {
+  const d = new Date(mondayKey + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 3);
+  return d.toISOString().slice(0, 10);
+}
+function offDuty(away: Record<string, {from:string;to:string}[]>, name: string, mondayKey: string) {
+  const T = thursdayKey(mondayKey);
+  return (away?.[name] || []).some((r) => r.from <= T && T <= r.to && r.from !== T);
+}
 
 Deno.serve(async () => {
   const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
@@ -119,6 +127,7 @@ Deno.serve(async () => {
         if (!prev) { await record(); continue; }
         const prevB = bundlesFor(prevKey);
         for (let p = 0; p < members.length; p++) {
+          if (offDuty(h.away || {}, members[p], prevKey)) continue;  // excused last week
           const b = prevB[mod(p + weekIndex - 1, 3)];
           const open = b.items.filter((_, i) => !prev[`${b.id}:${i}`] && !cur[`co:${b.id}:${i}`]);
           if (!open.length) continue;
@@ -132,8 +141,13 @@ Deno.serve(async () => {
         let title = "🧹 " + (h.name || "Chores"), body = "";
         if (k.kind === "chore") {
           title = "🧹 Chore day";
-          body = assignmentsFor(weekIndex, members, weekKey)
-            .map((x) => `${x.name}: ${x.bundle.title}`).join("\n");
+          const away = h.away || {};
+          const lines: string[] = [], skipped: string[] = [];
+          for (const x of assignmentsFor(weekIndex, members, weekKey)) {
+            if (offDuty(away, x.name, weekKey)) skipped.push(`${x.bundle.title} — unassigned (${x.name} away)`);
+            else lines.push(`${x.name}: ${x.bundle.title}`);
+          }
+          body = lines.concat(skipped).join("\n");
         } else if (k.kind === "bins_out") {
           title = "🗑️ Bins out tonight"; body = "Open the app to volunteer to take the bins out.";
         } else {
