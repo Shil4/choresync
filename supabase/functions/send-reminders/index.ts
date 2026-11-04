@@ -59,13 +59,15 @@ function weekInfo(y: number, m: number, d: number, anchorMonday: string) {
     weekIndex: Math.round((monday.getTime() - anchor.getTime()) / (7 * 864e5)) };
 }
 const toMinutes = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
-function thursdayKey(mondayKey: string) {
-  const d = new Date(mondayKey + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 3);
+function weekEndKey(mondayKey: string) {
+  const d = new Date(mondayKey + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + 6);
   return d.toISOString().slice(0, 10);
 }
 function offDuty(away: Record<string, {from:string;to:string}[]>, name: string, mondayKey: string) {
-  const T = thursdayKey(mondayKey);
-  return (away?.[name] || []).some((r) => r.from <= T && T <= r.to);
+  // Away for any part of the week (Mon-Sun) -> excused for the whole week,
+  // not just if the chore day (Thursday) itself falls in the away range.
+  const end = weekEndKey(mondayKey);
+  return (away?.[name] || []).some((r) => r.from <= end && r.to >= mondayKey);
 }
 
 Deno.serve(async () => {

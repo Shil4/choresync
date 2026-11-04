@@ -96,11 +96,13 @@ const weekKey = () => ymd(state.viewMonday);
 const isCurrentWeek = () => ymd(state.viewMonday) === ymd(mondayOf(new Date()));
 const myIndex = () => Math.max(0, (state.household?.members || []).indexOf(state.me));
 const myAssignment = () => { const wi = weekIndexOf(state.viewMonday); return bundlesForIndex(wi)[mod(myIndex() + wi, 3)]; };
-const thursdayKey = (monday) => { const t = new Date(monday); t.setDate(t.getDate() + 3); return ymd(t); };
+const weekEndKey = (monday) => { const t = new Date(monday); t.setDate(t.getDate() + 6); return ymd(t); };
 function offDutyName(name, monday) {
+  // Away for any part of the week (Mon-Sun) -> excused for the whole week,
+  // not just if the chore day (Thursday) itself falls in the away range.
   const ranges = (state.household?.away || {})[name] || [];
-  const T = thursdayKey(monday);
-  return ranges.some((r) => r.from <= T && T <= r.to);
+  const start = ymd(monday), end = weekEndKey(monday);
+  return ranges.some((r) => r.from <= end && r.to >= start);
 }
 const offDutyIdx = (p, wi) => offDutyName((state.household?.members || [])[p], mondayFromIndex(wi));
 const viewIsFuture = () => ymd(state.viewMonday) > ymd(mondayOf(new Date()));
@@ -524,7 +526,7 @@ function renderSettings() {
     </div>
     <div class="section-title">Away from home</div>
     <div class="card">
-      <div class="hint" style="margin-bottom:10px">Enter the dates you're <b>not home</b> — the first and last day away, not your travel days (you're home on those). Any week you're not home for its <b>Thursday</b> (the chore day) is skipped for you — no chores, no penalty.</div>
+      <div class="hint" style="margin-bottom:10px">Enter the dates you're <b>not home</b> — the first and last day away, not your travel days (you're home on those). Any week you're away for <b>any part of it</b> is skipped for you — no chores, no penalty.</div>
       <div id="awayList">${awayListHTML(h)}</div>
       <div class="field"><label>Who</label>${awayWhoSelect(h)}</div>
       <div class="row2">
