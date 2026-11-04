@@ -92,7 +92,7 @@ const state = {
   weekState: { done: {}, bins_out: [], bins_in: [] },
   me: localStorage.getItem("choresync_me") || "",
   stats: null, byIdx: {}, detail: null,
-  calPerson: "", showPastAway: false,
+  calMonth: null, calOff: null, showPastAway: false,
 };
 const indexOfMember = (name) => Math.max(0, (state.household?.members || []).indexOf(name));
 const weekKey = () => ymd(state.viewMonday);
@@ -481,90 +481,119 @@ function renderMissedDetail(p) {
 }
 
 // --- Clearance calendar ------------------------------------------------------
-// A chore is "on time" if ticked by its own week's Thursday, "late" if ticked
-// after that but before the grace week ends, and "not cleared" once the grace
-// week is over without it ever being ticked. This mirrors loadStats()'s missed-
-// week rule exactly, so the calendar and the leaderboard never disagree.
+// A chore is "on time" if ticked (either directly, or via the carry-up
+// checkbox) by its own week's Thursday, "late" if ticked after that but
+// before the grace week ends, and "not cleared" once the grace week is over
+// without it ever being ticked. This mirrors loadStats()'s missed-week rule
+// exactly, so the calendar and the leaderboard never disagree.
+// A legacy tick (recorded before dates were tracked, so it's a plain `true`
+// rather than a date string) can't be placed on a specific day - we only know
+// IT happened, not WHEN - so it's never guessed into "on time" or "late".
 function weekBounds(monday) {
   const thu = new Date(monday); thu.setDate(thu.getDate() + 3);
   const graceEnd = new Date(monday); graceEnd.setDate(graceEnd.getDate() + 13); // end of the following week
   return { thuKey: ymd(thu), graceKey: ymd(graceEnd) };
 }
-function classifyItem(monday, doneVal) {
-  const { thuKey, graceKey } = weekBounds(monday), today = todayStr();
-  if (doneVal === undefined) {
-    if (today > graceKey) return "crit";
-    if (today > thuKey) return "pendingLate";
-    return "pending";
+// Resolves one bundle item's real status, checking both where it could have
+// been ticked: directly in its own week, or via the carry-up checkbox the
+// following week (a separate "co:" key in the NEXT week's done map).
+function resolveItem(wi, p, bundleId, idx) {
+  const monday = mondayFromIndex(wi), { thuKey, graceKey } = weekBounds(monday);
+  const ownVal = (state.byIdx[wi] || {})[`${bundleId}:${idx}`];
+  if (ownVal !== undefined) {
+    if (ownVal === true) return { status: "legacy", pinDate: thuKey };
+    return { status: ownVal <= thuKey ? "good" : "warn", date: ownVal };
   }
-  if (doneVal === true) return "legacy"; // ticked before dates were tracked - can't know when
-  if (doneVal <= thuKey) return "good";
-  return "warn"; // ticked later than Thursday, whether inside or just past the grace week
-}
-function fmtShort(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
-}
-function calItemsFor(wi, p) {
-  const B = bundlesForIndex(wi), b = B[mod(p + wi, 3)];
-  const done = state.byIdx[wi] || {};
-  return b.items.map((it, i) => ({ n: it.n, doneVal: done[`${b.id}:${i}`] }));
-}
-function calCard(wi, p) {
-  const monday = mondayFromIndex(wi), cur = weekIndexOf(mondayOf(new Date()));
-  if (offDutyIdx(p, wi)) {
-    return `<div class="calweek away"><div class="calhead"><div class="calrange">${prettyRange(monday)}</div>
-      <span class="calstatus away">✈️ Away — excused</span></div></div>`;
+  const carryVal = (state.byIdx[wi + 1] || {})[`co:${bundleId}:${idx}`];
+  if (carryVal !== undefined) {
+    if (carryVal === true) return { status: "legacy", pinDate: thuKey };
+    return { status: "warn", date: carryVal }; // a carry-up tick is always late by definition
   }
-  const items = calItemsFor(wi, p).map((it) => ({ ...it, status: classifyItem(monday, it.doneVal) }));
-  const n = items.length || 1;
-  const counts = { good: 0, warn: 0, crit: 0, pending: 0, pendingLate: 0, legacy: 0 };
-  items.forEach((it) => counts[it.status]++);
-  let statusHTML;
-  if (wi === cur && (counts.crit || counts.pending || counts.pendingLate) && !counts.crit) {
-    statusHTML = `<span class="calstatus pending">⏳ In progress</span>`;
-  } else if (counts.crit === 0 && counts.warn === 0 && counts.legacy === 0 && counts.pendingLate === 0) {
-    statusHTML = `<span class="calstatus good">✓ Cleared on time</span>`;
-  } else if (counts.crit === 0 && counts.good === 0 && counts.pendingLate === 0) {
-    statusHTML = `<span class="calstatus warn">⏳ Cleared late</span>`;
-  } else if (counts.crit === 0 && counts.pendingLate === 0) {
-    statusHTML = `<span class="calstatus warn">⏳ Mixed — ${counts.good} on time, ${counts.warn + counts.legacy} late</span>`;
-  } else if (counts.pendingLate) {
-    statusHTML = `<span class="calstatus warn">⚠️ Overdue — clear by ${DAYS[6 /* Sun */]}</span>`;
-  } else if (counts.good === 0 && counts.warn === 0) {
-    statusHTML = `<span class="calstatus crit">✕ Not cleared</span>`;
-  } else {
-    statusHTML = `<span class="calstatus crit">✕ Mixed — ${counts.good + counts.warn} cleared, ${counts.crit} missing</span>`;
-  }
-  const seg = (cls, c) => (c ? `<span class="${cls}" style="width:${(c / n) * 100}%"></span>` : "");
-  const chipClass = (s) => (s === "good" ? "good" : s === "warn" || s === "legacy" ? "warn" : s === "crit" ? "crit" : "pending");
-  const chipLabel = (it) => {
-    if (it.status === "good") return `done ${fmtShort(it.doneVal)}`;
-    if (it.status === "warn") return `done late (${fmtShort(it.doneVal)})`;
-    if (it.status === "legacy") return "done — no date on record";
-    if (it.status === "crit") return "never cleared";
-    if (it.status === "pendingLate") return "overdue, clear soon";
-    return "not due yet";
+  const today = todayStr();
+  if (today > graceKey) return { status: "crit", date: graceKey };
+  if (today > thuKey) return { status: "pendingLate" };
+  return { status: "pending" };
+}
+// Builds { dateStr: { personName: [{status,count}] } } for every day in
+// [fromKey, toKey], scanning a slightly wider week window so a late tick
+// landing in the grace week still gets picked up at the right cell.
+function buildCalEvents(fromKey, toKey) {
+  const events = {}, members = state.household.members || [];
+  const add = (dateStr, person, status) => {
+    if (!dateStr || dateStr < fromKey || dateStr > toKey) return;
+    const day = (events[dateStr] = events[dateStr] || {});
+    const list = (day[person] = day[person] || []);
+    const existing = list.find((e) => e.status === status);
+    if (existing) existing.count++; else list.push({ status, count: 1 });
   };
-  return `<div class="calweek">
-    <div class="calhead"><div class="calrange">${prettyRange(monday)}</div>${statusHTML}</div>
-    <div class="calbar">${seg("cb-good", counts.good)}${seg("cb-warn", counts.warn + counts.legacy)}${seg("cb-crit", counts.crit)}${seg("cb-pending", counts.pending + counts.pendingLate)}</div>
-    <div class="calitems">${items.map((it) => `<span class="calchip ${chipClass(it.status)}">${esc(it.n)} <span class="w">${chipLabel(it)}</span></span>`).join("")}</div>
-  </div>`;
+  const wiStart = weekIndexOf(mondayOf(new Date(fromKey + "T00:00:00"))) - 1;
+  const wiEnd = weekIndexOf(mondayOf(new Date(toKey + "T00:00:00"))) + 1;
+  for (let wi = Math.max(0, wiStart); wi <= wiEnd; wi++) {
+    const B = bundlesForIndex(wi);
+    members.forEach((name, p) => {
+      if (offDutyIdx(p, wi)) return; // away week -> excused, nothing to plot
+      const b = B[mod(p + wi, 3)];
+      b.items.forEach((it, i) => {
+        const r = resolveItem(wi, p, b.id, i);
+        if (r.status === "good" || r.status === "warn" || r.status === "crit") add(r.date, name, r.status);
+        else if (r.status === "legacy") add(r.pinDate, name, "legacy");
+      });
+    });
+  }
+  return events;
 }
+function awayPeopleOn(dateStr) {
+  const wi = weekIndexOf(mondayOf(new Date(dateStr + "T00:00:00")));
+  return (state.household.members || []).filter((_, p) => offDutyIdx(p, wi));
+}
+const CAL_LABEL = { good: "cleared", warn: "cleared late", crit: "not cleared", legacy: "cleared — day not recorded" };
 function renderCalendar() {
   const h = state.household, members = h.members || [];
-  if (!state.calPerson || !members.includes(state.calPerson)) state.calPerson = state.me || members[0];
-  const cur = weekIndexOf(mondayOf(new Date())), from = Math.max(0, cur - 7), p = indexOfMember(state.calPerson);
-  let cards = "";
-  for (let wi = cur; wi >= from; wi--) cards += calCard(wi, p);
-  view.innerHTML = `<div class="section-title">Clearance calendar</div>
-    <div class="caltabs">${members.map((m) => `<button class="caltab ${m === state.calPerson ? "on" : ""}" data-m="${esc(m)}">${esc(m)}</button>`).join("")}</div>
-    ${cards}
-    <div class="card" style="color:var(--muted);font-size:13px;font-weight:600">
-      Green = cleared by Thursday. Yellow = cleared later but before the grace week ends. Red = still not cleared once the grace week is over — this is exactly what counts as a missed week on the leaderboard.
+  if (!state.calMonth) state.calMonth = mondayOf(new Date());
+  if (!state.calOff) state.calOff = [];
+  const view0 = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth(), 1);
+  const startOffset = (view0.getDay() + 6) % 7; // Monday-start grid
+  const gridStart = new Date(view0); gridStart.setDate(1 - startOffset);
+  const days = Array.from({ length: 42 }, (_, i) => { const d = new Date(gridStart); d.setDate(gridStart.getDate() + i); return d; });
+  const fromKey = ymd(days[0]), toKey = ymd(days[41]), todayKey = todayStr();
+  const events = buildCalEvents(fromKey, toKey);
+  const active = (m) => !state.calOff.includes(m);
+  const DOWLABELS = [["Mon", ""], ["Tue", ""], ["Wed", ""], ["Thu", "due"], ["Fri", ""], ["Sat", ""], ["Sun", "grace ends"]];
+
+  const dow = DOWLABELS.map(([d, tag]) => `<div class="dow ${tag === "due" ? "due" : tag ? "grace" : ""}">${d}${tag ? `<span class="mk">${tag}</span>` : ""}</div>`).join("");
+  const cells = days.map((d) => {
+    const dateStr = ymd(d), out = d.getMonth() !== view0.getMonth(), isToday = dateStr === todayKey;
+    const away = awayPeopleOn(dateStr).filter(active);
+    const dayEvents = events[dateStr] || {};
+    const dots = members.filter(active).flatMap((m) => (dayEvents[m] || []).map((e) =>
+      `<span class="pdot ${e.status === "legacy" ? "legacy" : e.status}" title="${esc(m)} — ${CAL_LABEL[e.status]}${e.count > 1 ? ` (×${e.count})` : ""}">${e.status === "legacy" ? "~" + e.count : m[0]}</span>`
+    )).join("");
+    return `<div class="cell ${out ? "out" : ""} ${isToday ? "today" : ""} ${away.length ? "away-day" : ""}">
+      <span class="datenum">${d.getDate()}</span>
+      <div class="dots">${dots}</div>
+      ${away.length ? `<span class="away-tag">✈️ ${away.map(esc).join(", ")}</span>` : ""}
     </div>`;
-  view.querySelectorAll(".caltab").forEach((t) => (t.onclick = () => { state.calPerson = t.dataset.m; render(); }));
+  }).join("");
+
+  view.innerHTML = `<div class="section-title">Clearance calendar</div>
+    <div class="panel-note">
+      Green = cleared by Thursday. Yellow = cleared later but before the grace week ends. Red = still not cleared once
+      the grace week is over — exactly what counts as a missed week on the leaderboard. A dashed marker means it was
+      cleared before dates were tracked here, so the exact day isn't known.
+    </div>
+    <div class="caltoolbar">
+      <div class="calnav"><button id="calPrev">‹</button><div class="calmonth">${view0.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</div><button id="calNext">›</button></div>
+      <div class="people">${members.map((m) => `<button class="pchip ${active(m) ? "" : "off"}" data-m="${esc(m)}"><span class="d" style="background:${PCOL[indexOfMember(m)]}"></span>${esc(m)}</button>`).join("")}</div>
+    </div>
+    <div class="calgrid">${dow}${cells}</div>`;
+
+  document.getElementById("calPrev").onclick = () => { state.calMonth = new Date(view0.getFullYear(), view0.getMonth() - 1, 1); render(); };
+  document.getElementById("calNext").onclick = () => { state.calMonth = new Date(view0.getFullYear(), view0.getMonth() + 1, 1); render(); };
+  view.querySelectorAll(".pchip").forEach((b) => (b.onclick = () => {
+    const m = b.dataset.m;
+    state.calOff = active(m) ? [...state.calOff, m] : state.calOff.filter((x) => x !== m);
+    render();
+  }));
 }
 
 function daySel(id, v) { return `<select class="inp" name="${id}">${DAYS.map((d, i) => `<option value="${i}"${i === v ? " selected" : ""}>${d}</option>`).join("")}</select>`; }

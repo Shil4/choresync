@@ -180,29 +180,31 @@ input[type=text],input[type=time],input[type=date],select.inp{
 .binaway{font-size:12px;color:var(--muted);font-style:italic;align-self:center}
 
 /* --- Clearance calendar ---------------------------------------------------- */
-.caltabs{display:flex;gap:6px;margin:0 4px 14px;flex-wrap:wrap}
-.caltab{border:1.5px solid var(--line);background:#fff;color:var(--muted);border-radius:999px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer}
-.caltab.on{background:var(--ink);color:#fff;border-color:var(--ink)}
-.calweek{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:14px;margin-bottom:12px}
-.calweek.away{opacity:.75}
-.calhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap}
-.calrange{font-weight:800;font-size:14px}
-.calstatus{font-size:12px;font-weight:800;padding:3px 10px;border-radius:999px;white-space:nowrap}
-.calstatus.good{color:#15803d;background:#dcfce7}
-.calstatus.warn{color:#b45309;background:#fef3c7}
-.calstatus.crit{color:#b91c1c;background:#fee2e2}
-.calstatus.pending{color:var(--muted);background:#f1f5f9}
-.calstatus.away{color:#1e40af;background:#dbeafe}
-.calbar{height:8px;border-radius:999px;background:#eef2f7;overflow:hidden;display:flex;margin-bottom:10px}
-.calbar span{height:100%}
-.cb-good{background:var(--good)}
-.cb-warn{background:#f59e0b}
-.cb-crit{background:#ef4444}
-.cb-pending{background:#cbd5e1}
-.calitems{display:flex;flex-wrap:wrap;gap:6px}
-.calchip{font-size:12px;padding:5px 10px;border-radius:999px;display:flex;align-items:center;gap:5px;font-weight:700}
-.calchip.good{color:#15803d;background:#dcfce7}
-.calchip.warn{color:#b45309;background:#fef3c7}
-.calchip.crit{color:#b91c1c;background:#fee2e2}
-.calchip.pending{color:var(--muted);background:#f1f5f9}
-.calchip .w{font-weight:600;opacity:.8}
+.panel-note{font-size:12.5px;color:var(--muted);font-weight:600;background:var(--card);border:1px solid var(--line);
+  border-radius:14px;padding:10px 12px;margin:0 4px 14px;line-height:1.5}
+.caltoolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 4px 12px;flex-wrap:wrap}
+.calnav{display:flex;align-items:center;gap:10px}
+.calnav button{border:1.5px solid var(--line);background:#fff;color:var(--ink);width:30px;height:30px;border-radius:10px;cursor:pointer;font-size:16px}
+.calmonth{font-weight:800;font-size:14.5px;min-width:120px;text-align:center}
+.people{display:flex;gap:6px;flex-wrap:wrap}
+.pchip{border:1.5px solid var(--line);background:#fff;border-radius:999px;padding:5px 11px 5px 8px;font-size:12.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--muted)}
+.pchip .d{width:9px;height:9px;border-radius:50%}
+.pchip.off{opacity:.4}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);border:1px solid var(--line);border-radius:16px;overflow:hidden;background:#fff;box-shadow:var(--shadow)}
+.dow{padding:8px 4px;font-size:10.5px;font-weight:800;color:var(--muted);text-align:center;border-bottom:1px solid var(--line);background:#fafbfe}
+.dow .mk{display:block;font-size:8.5px;font-weight:800;margin-top:2px}
+.dow.due .mk{color:#b45309}
+.dow.grace .mk{color:#b91c1c}
+.cell{min-height:72px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);padding:5px;position:relative}
+.cell:nth-child(7n){border-right:none}
+.cell.out{color:var(--muted);background:#fafbfe}
+.cell.today .datenum{background:var(--ink);color:#fff}
+.cell.away-day{background:#eff6ff}
+.datenum{font-size:11px;font-weight:700;width:19px;height:19px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%}
+.dots{display:flex;flex-wrap:wrap;gap:3px;margin-top:4px}
+.pdot{width:15px;height:15px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;color:#fff}
+.pdot.good{background:var(--good)}
+.pdot.warn{background:#f59e0b;color:#3a2a00}
+.pdot.crit{background:#ef4444}
+.pdot.legacy{background:#fff;border:1.5px dashed var(--muted);color:var(--muted)}
+.away-tag{font-size:9px;color:#1e40af;font-weight:700;display:block;margin-top:3px}
