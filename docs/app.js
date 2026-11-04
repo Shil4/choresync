@@ -68,6 +68,7 @@ const bundleComplete = (done, b) => b.items.every((_, i) => done[`${b.id}:${i}`]
 // --- Dates ------------------------------------------------------------------
 const pad = (n) => String(n).padStart(2, "0");
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const todayStr = () => ymd(new Date());
 function mondayOf(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - mod(x.getDay() + 6, 7)); return x; }
 function anchorMonday() { return mondayOf(new Date((state.household?.anchor_monday || "2026-07-13") + "T00:00:00")); }
 function weekIndexOf(monday) { return Math.round((monday - anchorMonday()) / (7 * 864e5)); }
@@ -91,7 +92,9 @@ const state = {
   weekState: { done: {}, bins_out: [], bins_in: [] },
   me: localStorage.getItem("choresync_me") || "",
   stats: null, byIdx: {}, detail: null,
+  calPerson: "", showPastAway: false,
 };
+const indexOfMember = (name) => Math.max(0, (state.household?.members || []).indexOf(name));
 const weekKey = () => ymd(state.viewMonday);
 const isCurrentWeek = () => ymd(state.viewMonday) === ymd(mondayOf(new Date()));
 const myIndex = () => Math.max(0, (state.household?.members || []).indexOf(state.me));
@@ -218,7 +221,7 @@ async function toggleDone(bId, idx) {
   const key = `${bId}:${idx}`;
   const wasComplete = bundleComplete(state.weekState.done, myAssignment());
   const done = { ...state.weekState.done };
-  if (done[key]) delete done[key]; else done[key] = true;
+  if (done[key]) delete done[key]; else done[key] = todayStr();
   state.weekState = { ...state.weekState, done };
   render();
   if (!wasComplete && bundleComplete(done, myAssignment())) burstConfetti();
@@ -227,7 +230,7 @@ async function toggleDone(bId, idx) {
 async function toggleCarry(key) {
   if (!isCurrentWeek()) return;
   const done = { ...state.weekState.done };
-  if (done[key]) delete done[key]; else done[key] = true;
+  if (done[key]) delete done[key]; else done[key] = todayStr();
   state.weekState = { ...state.weekState, done };
   render();
   if (!carryOpen(weekIndexOf(state.viewMonday), myIndex()).length) burstConfetti();
@@ -477,17 +480,111 @@ function renderMissedDetail(p) {
   document.getElementById("back").onclick = () => { state.detail = null; render(); };
 }
 
+// --- Clearance calendar ------------------------------------------------------
+// A chore is "on time" if ticked by its own week's Thursday, "late" if ticked
+// after that but before the grace week ends, and "not cleared" once the grace
+// week is over without it ever being ticked. This mirrors loadStats()'s missed-
+// week rule exactly, so the calendar and the leaderboard never disagree.
+function weekBounds(monday) {
+  const thu = new Date(monday); thu.setDate(thu.getDate() + 3);
+  const graceEnd = new Date(monday); graceEnd.setDate(graceEnd.getDate() + 13); // end of the following week
+  return { thuKey: ymd(thu), graceKey: ymd(graceEnd) };
+}
+function classifyItem(monday, doneVal) {
+  const { thuKey, graceKey } = weekBounds(monday), today = todayStr();
+  if (doneVal === undefined) {
+    if (today > graceKey) return "crit";
+    if (today > thuKey) return "pendingLate";
+    return "pending";
+  }
+  if (doneVal === true) return "legacy"; // ticked before dates were tracked - can't know when
+  if (doneVal <= thuKey) return "good";
+  return "warn"; // ticked later than Thursday, whether inside or just past the grace week
+}
+function fmtShort(dateStr) {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" });
+}
+function calItemsFor(wi, p) {
+  const B = bundlesForIndex(wi), b = B[mod(p + wi, 3)];
+  const done = state.byIdx[wi] || {};
+  return b.items.map((it, i) => ({ n: it.n, doneVal: done[`${b.id}:${i}`] }));
+}
+function calCard(wi, p) {
+  const monday = mondayFromIndex(wi), cur = weekIndexOf(mondayOf(new Date()));
+  if (offDutyIdx(p, wi)) {
+    return `<div class="calweek away"><div class="calhead"><div class="calrange">${prettyRange(monday)}</div>
+      <span class="calstatus away">✈️ Away — excused</span></div></div>`;
+  }
+  const items = calItemsFor(wi, p).map((it) => ({ ...it, status: classifyItem(monday, it.doneVal) }));
+  const n = items.length || 1;
+  const counts = { good: 0, warn: 0, crit: 0, pending: 0, pendingLate: 0, legacy: 0 };
+  items.forEach((it) => counts[it.status]++);
+  let statusHTML;
+  if (wi === cur && (counts.crit || counts.pending || counts.pendingLate) && !counts.crit) {
+    statusHTML = `<span class="calstatus pending">⏳ In progress</span>`;
+  } else if (counts.crit === 0 && counts.warn === 0 && counts.legacy === 0 && counts.pendingLate === 0) {
+    statusHTML = `<span class="calstatus good">✓ Cleared on time</span>`;
+  } else if (counts.crit === 0 && counts.good === 0 && counts.pendingLate === 0) {
+    statusHTML = `<span class="calstatus warn">⏳ Cleared late</span>`;
+  } else if (counts.crit === 0 && counts.pendingLate === 0) {
+    statusHTML = `<span class="calstatus warn">⏳ Mixed — ${counts.good} on time, ${counts.warn + counts.legacy} late</span>`;
+  } else if (counts.pendingLate) {
+    statusHTML = `<span class="calstatus warn">⚠️ Overdue — clear by ${DAYS[6 /* Sun */]}</span>`;
+  } else if (counts.good === 0 && counts.warn === 0) {
+    statusHTML = `<span class="calstatus crit">✕ Not cleared</span>`;
+  } else {
+    statusHTML = `<span class="calstatus crit">✕ Mixed — ${counts.good + counts.warn} cleared, ${counts.crit} missing</span>`;
+  }
+  const seg = (cls, c) => (c ? `<span class="${cls}" style="width:${(c / n) * 100}%"></span>` : "");
+  const chipClass = (s) => (s === "good" ? "good" : s === "warn" || s === "legacy" ? "warn" : s === "crit" ? "crit" : "pending");
+  const chipLabel = (it) => {
+    if (it.status === "good") return `done ${fmtShort(it.doneVal)}`;
+    if (it.status === "warn") return `done late (${fmtShort(it.doneVal)})`;
+    if (it.status === "legacy") return "done — no date on record";
+    if (it.status === "crit") return "never cleared";
+    if (it.status === "pendingLate") return "overdue, clear soon";
+    return "not due yet";
+  };
+  return `<div class="calweek">
+    <div class="calhead"><div class="calrange">${prettyRange(monday)}</div>${statusHTML}</div>
+    <div class="calbar">${seg("cb-good", counts.good)}${seg("cb-warn", counts.warn + counts.legacy)}${seg("cb-crit", counts.crit)}${seg("cb-pending", counts.pending + counts.pendingLate)}</div>
+    <div class="calitems">${items.map((it) => `<span class="calchip ${chipClass(it.status)}">${esc(it.n)} <span class="w">${chipLabel(it)}</span></span>`).join("")}</div>
+  </div>`;
+}
+function renderCalendar() {
+  const h = state.household, members = h.members || [];
+  if (!state.calPerson || !members.includes(state.calPerson)) state.calPerson = state.me || members[0];
+  const cur = weekIndexOf(mondayOf(new Date())), from = Math.max(0, cur - 7), p = indexOfMember(state.calPerson);
+  let cards = "";
+  for (let wi = cur; wi >= from; wi--) cards += calCard(wi, p);
+  view.innerHTML = `<div class="section-title">Clearance calendar</div>
+    <div class="caltabs">${members.map((m) => `<button class="caltab ${m === state.calPerson ? "on" : ""}" data-m="${esc(m)}">${esc(m)}</button>`).join("")}</div>
+    ${cards}
+    <div class="card" style="color:var(--muted);font-size:13px;font-weight:600">
+      Green = cleared by Thursday. Yellow = cleared later but before the grace week ends. Red = still not cleared once the grace week is over — this is exactly what counts as a missed week on the leaderboard.
+    </div>`;
+  view.querySelectorAll(".caltab").forEach((t) => (t.onclick = () => { state.calPerson = t.dataset.m; render(); }));
+}
+
 function daySel(id, v) { return `<select class="inp" name="${id}">${DAYS.map((d, i) => `<option value="${i}"${i === v ? " selected" : ""}>${d}</option>`).join("")}</select>`; }
 function awayWhoSelect(h) {
   return `<select class="inp" id="awayWho">${(h.members || []).map((m, i) => `<option value="${i}"${m === state.me ? " selected" : ""}>${esc(m)}</option>`).join("")}</select>`;
 }
 function fmtD(s) { return new Date(s + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); }
 function awayListHTML(h) {
-  const away = h.away || {}, rows = [];
-  (h.members || []).forEach((m) => (away[m] || []).forEach((r, i) =>
-    rows.push(`<div class="awayrow"><span>✈️ <b>${esc(m)}</b> · ${fmtD(r.from)} → ${fmtD(r.to)}</span>
-      <button type="button" class="rm" data-m="${esc(m)}" data-i="${i}">✕</button></div>`)));
-  return rows.length ? rows.join("") : `<div class="hint" style="margin-bottom:10px">No away periods set.</div>`;
+  const away = h.away || {}, today = todayStr(), rows = [];
+  let pastCount = 0;
+  (h.members || []).forEach((m) => (away[m] || []).forEach((r, i) => {
+    const isPast = r.to < today;
+    if (isPast) { pastCount++; if (!state.showPastAway) return; }
+    const tag = isPast ? `<span class="awaytag past">past</span>` : r.from <= today ? `<span class="awaytag">ongoing</span>` : "";
+    rows.push(`<div class="awayrow ${isPast ? "past" : ""}"><span>✈️ <b>${esc(m)}</b> · ${fmtD(r.from)} → ${fmtD(r.to)} ${tag}</span>
+      <button type="button" class="rm" data-m="${esc(m)}" data-i="${i}">✕</button></div>`);
+  }));
+  const list = rows.length ? rows.join("") : `<div class="hint" style="margin-bottom:10px">No upcoming away periods.</div>`;
+  const toggle = pastCount ? `<button type="button" class="showpast" id="showPastAway">${state.showPastAway ? "Hide" : "Show"} ${pastCount} past period${pastCount === 1 ? "" : "s"}</button>` : "";
+  return list + toggle;
 }
 async function saveAway(away) {
   state.household = { ...state.household, away };
@@ -495,6 +592,8 @@ async function saveAway(away) {
   await loadStats(); render();
 }
 function wireAway() {
+  const pastBtn = document.getElementById("showPastAway");
+  if (pastBtn) pastBtn.onclick = () => { state.showPastAway = !state.showPastAway; render(); };
   const add = document.getElementById("addAway");
   if (add) add.onclick = async () => {
     const who = (state.household.members || [])[+document.getElementById("awayWho").value];
@@ -564,6 +663,7 @@ function render() {
   renderHero();
   if (state.tab === "home") renderHome();
   else if (state.tab === "ranks") renderRanks();
+  else if (state.tab === "calendar") renderCalendar();
   else renderSettings();
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === state.tab));
 }
