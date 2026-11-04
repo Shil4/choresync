@@ -550,7 +550,7 @@ const CAL_LABEL = { good: "cleared", warn: "cleared late", crit: "not cleared", 
 function renderCalendar() {
   const h = state.household, members = h.members || [];
   if (!state.calMonth) state.calMonth = mondayOf(new Date());
-  if (!state.calOff) state.calOff = [];
+  if (!state.calOff) state.calOff = members.filter((m) => m !== state.me); // default: just my own profile
   const view0 = new Date(state.calMonth.getFullYear(), state.calMonth.getMonth(), 1);
   const startOffset = (view0.getDay() + 6) % 7; // Monday-start grid
   const gridStart = new Date(view0); gridStart.setDate(1 - startOffset);
